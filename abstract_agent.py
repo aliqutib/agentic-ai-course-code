@@ -20,9 +20,10 @@ def get_tools():
 def agent_loop():
 
     user_input = input("Enter input: ")
-    internal_state = LLM(user_input) #state can be {action: "tool", tool_name:"calculator", parameters: expression}
-
     session = [{"user": user_input}]
+    
+    internal_state = LLM(session) #state can be {action: "tool", tool_name:"calculator", parameters: expression}
+
     
     while True:    
 
