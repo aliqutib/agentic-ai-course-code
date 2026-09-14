@@ -35,6 +35,5 @@ def agent_loop():
 
         internal_state = LLM(session)
 
-    return internal_state
         
             
