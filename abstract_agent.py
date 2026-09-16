@@ -35,5 +35,68 @@ def agent_loop():
 
         internal_state = LLM(session)
 
+
+
+schema = [
+    {
+        "type":"function",
+        "function":{
+            "name": "create_task",
+            "description": "A tool to create/add task in the rest of task list for the user",
+            "parameters":{
+                "type": "object",
+                "properties": {
+                    "task_title":{
+                        "type": "string",
+                        "description":"Task title to be shown as heading - max 50 character"
+                    },
+                    "task_description": {
+                        "type": "string",
+                        "description":"Detailed description of the task - max 500 characters"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "based on the description priority flag to the task",
+                        "default": "medium"
+                    }
+                }
+            },
+            "required": ["task_title"]
+        }
+    },
+    {
+        "type":"function",
+        "function":{
+            "name": "search_tasks",
+            "description": "A tool to return sublist of the task which match query",
+            "parameters":{
+                "type": "object",
+                "properties": {
+                    "query":{
+                        "type": "string",
+                        "description":"phrase mentioning task\'s id, title, description or priority flag which is supposed to be matched"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type":"function",
+        "function":{
+            "name": "complete_task",
+            "description": "A tool to mark any task completed",
+            "parameters":{
+                "type": "object",
+                "properties": {
+                    "task_id":{
+                        "type": "string",
+                        "description":"Unique task id which helps to find specific task from the list"
+                    },
+                }
+            }
+        }
+    }
+]
         
             

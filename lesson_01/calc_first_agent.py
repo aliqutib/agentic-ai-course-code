@@ -1,13 +1,27 @@
+#----Exceptions----
+
+class ToolError(Exception):
+    pass
+
+class InvalidToolInput(ToolError):
+    pass
+
+class UnsupportedOperation(ToolError):
+    pass
+
+class NonRecoverableError(ToolError):
+    pass
+
 #------utils----
 from math import sqrt
 
 def calculate(operation, a, b=None):
 
     if not isinstance(a, (int, float)):
-        raise TypeError("Parameter 'a' must be a number")
+        raise InvalidToolInput("Parameter 'a' must be a number")
 
     if b is not None and not isinstance(b, (int, float)):
-        raise TypeError("Parameter 'b' must be a number")
+        raise InvalidToolInput("Parameter 'b' must be a number")
     
     if (b is not None):
         if operation == "add":
@@ -21,18 +35,18 @@ def calculate(operation, a, b=None):
 
         elif operation == "divide":
             if b == 0:
-                raise ValueError("Cannot divide by zero")
+                raise NonRecoverableError("Cannot divide by zero")
             return a / b
 
         elif operation == "power":
             return a ** b
         else:
-            raise ValueError(f"Unknown binary operation: {operation}")
+            raise UnsupportedOperation(f"Unknown binary operation: {operation}")
     else:
         if operation == "sqrt":
             return sqrt(a)
         else:
-            raise ValueError(f"Unknown Unary operation: {operation} OR if you mean Binary operation, it need two operands")
+            raise UnsupportedOperation(f"Unknown Unary operation: {operation} OR if you mean Binary operation, it need two operands")
 
 
 
@@ -49,7 +63,8 @@ tool_definitions = [
                 "type": "object",
                 "properties": {
                     "operation": {
-                        "type": "string", 
+                        "type": "string",
+                        "enum":["add", "subtract", "multiply", "divide", "power", "sqrt"], 
                         "description": "A mathematical unary or binary operation in english small letters (e.g: add, divide)"
                     },
                     "a":{
@@ -101,11 +116,12 @@ client = OpenAI(
     api_key=os.getenv("OR_API_KEY")
 )
 
-session = [{"role": "user", "content": "Find mod of 12"}]
+session = [{"role": "user", "content": "Greet Mr. Ali and find cube of 3"}]
 
 MAX_ITERATION = 5
-MAX_RETIRES  = 2
-retires  = 0
+MAX_RETRIES  = 2
+retries  = 0
+should_stop = False
 for _ in range(MAX_ITERATION):
     
     #1. LLM interpert the task and decide the tool/action
@@ -119,6 +135,7 @@ for _ in range(MAX_ITERATION):
 
     if message.tool_calls:
 
+        print("tool call: ", message.tool_calls)
         for tool_call in message.tool_calls:
 
             tool_name = tool_call.function.name
@@ -134,17 +151,33 @@ for _ in range(MAX_ITERATION):
             else:
                 try:
                     tool_result = tool(**parameters)
-                    success = True 
-                except Exception as e:
-                    tool_result = f"Tool execution failed: {e}"
-                    success = False
-                    retires += 1
-                    if retires  >= MAX_RETIRES:
+
+                except UnsupportedOperation as e:
+                    retries += 1
+                    tool_result = f"RECOVERABLE ERROR: {e}"
+                    if retries  >= MAX_RETRIES:
                         print("Agent stopped: maximum retries reached.")
-                        break
-            
+                        should_stop = True
+    
+                except InvalidToolInput as e:
+                    retries += 1
+                    tool_result = f"RECOVERABLE ERROR: {e}"
+                    if retries  >= MAX_RETRIES:
+                        print("Agent stopped: maximum retries reached.")
+                        should_stop = True
+    
+                except NonRecoverableError as e:
+                    tool_result = f"NON-RECOVERABLE ERROR: {e}"
+                    should_stop = True    
+                 
+                except Exception as e:
+                    tool_result = f"UNEXPECTED ERROR: {e}"
+                    should_stop = True
 
             print(f"Tool Result: {tool_result}")
+
+            if should_stop:
+                break
 
             session.append({
                 "role": "tool",
