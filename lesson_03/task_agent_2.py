@@ -17,7 +17,7 @@ def create_task(task_title, task_description, priority="medium"):
 def search_tasks(query):
     query = query.lower()
 
-    return [
+    found_tasks = [
         task for task in task_list
         if query in task["task_id"].lower()
         or query in task["task_title"].lower()
@@ -25,13 +25,18 @@ def search_tasks(query):
         or query in task["priority"].lower()
     ]
 
+    if found_tasks:
+        return {"success": True, "result": found_tasks}
+    else:
+        return {"success": False, "Error": "Entered query's task was not found. Either task is not in the list or try changing your searched keyword"}
+
 def mark_as_completed(task_id):
     for task in task_list:
         if task["task_id"] == task_id:
             task["completed"] = True
-            return task 
+            return {"success": True, "result": task} 
     else:
-        return {"error": "Task not found"}
+        return {"success": False, "error": "Task not found"}
 
 
 tool_schema = [
@@ -75,7 +80,8 @@ tool_schema = [
                         "description":"phrase mentioning task\'s id, title, description or priority flag which is supposed to be matched"
                     }
                 }
-            }
+            },
+            "required": ["query"]
         }
     },
     {
@@ -91,7 +97,8 @@ tool_schema = [
                         "description":"Unique task id which helps to find specific task from the list"
                     },
                 }
-            }
+            },
+            "required": ["task_id"]
         }
     }
 ]
@@ -101,12 +108,30 @@ tool_schema = [
 
 tool_registry = {"create_task": create_task, "search_tasks": search_tasks, "mark_as_completed": mark_as_completed}
 
+#dispatcher
 def execute(tool_name, arguements):
 
     if tool_name not in tool_registry:
         return {"Error": f"Unknown Tool: {tool_name}"}
 
     return tool_registry[tool_name](**arguements)
+
+#tool validator
+def is_valid_tool_call(tool_name, arguements):
+    if tool_name in tool_registry.keys():
+        for tool in tool_schema:
+            if tool["function"]["name"]==tool_name:
+                allowed_arguements = set(tool["function"]["parameters"]["properties"].keys())
+                required_arguements = set(tool["function"]["required"])
+                supplied_arguements = set(arguements.keys())
+                if required_arguements.issubset(supplied_arguements) and supplied_arguements.issubset(allowed_arguements):
+                    return {"valid": True, "Message": "Function and Arguements exsit in tool schema"}
+                else:
+                    return {"valid": False, "Error": "Function exist but arguements are invalid"}
+    else:
+        return {"valid": False, "Error": "Function doesn't exist in tool schema"}
+
+
 
 
 load_dotenv()
@@ -117,29 +142,57 @@ client = OpenAI(
     api_key=os.getenv("OR_API_KEY")
 )
 
-session = [{"role": "user", "content": "Find my task related to tool calling and mark it as completed."}]
+
+
+state = {
+    "goal":None,
+    "session": [{"role": "user", "content": "Find my task regarding creating space ship and mail its details to my personal email account"}],
+    "status": "running",
+    "step_count": 0,
+    "last_action": None,
+    "last_result": None
+}
+
+state["goal"] = state["session"][0]["content"]
 
 MAX_ITERATION = 5
 
-for _ in range(MAX_ITERATION):
+while state["status"] == "running":
+
+    if state["step_count"] > MAX_ITERATION:
+        state["status"] = "failed"
+        break
 
     response = client.chat.completions.create(
         model="qwen/qwen3-8b",
-        messages=session,
+        messages=state["session"],
         tools=tool_schema
     )
 
+    state["step_count"] += 1
+
+
     message = response.choices[0].message
-    session.append(message) 
+    state["session"].append(message) 
 
     if message.tool_calls:
         for tool_call in message.tool_calls:
+            state["last_action"] = tool_call
             tool_name = tool_call.function.name
             arguements = json.loads(tool_call.function.arguments)
-            tool_result = execute(tool_name=tool_name, arguements=arguements)
-            session.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_result)})
-    else:
-        print(f"Final Answer: {message.content}")
-        break
 
-print(session)
+            validation = is_valid_tool_call(tool_name, arguements)
+
+            if validation["valid"]:
+                tool_result = execute(tool_name=tool_name, arguements=arguements)
+            else:
+                tool_result = validation
+            state["last_result"] = tool_result
+            state["session"].append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_result)})
+    else:
+        state["status"] = "completed"
+
+if state["status"] == "completed":
+    print(f"Final Answer: {message.content}")
+elif state["status"] == "failed":
+    print("Agent Reached Maximum Iteration")
