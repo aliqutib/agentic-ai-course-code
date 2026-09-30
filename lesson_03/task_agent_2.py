@@ -7,6 +7,14 @@ from dotenv import load_dotenv
 task_list = [{'task_id': 'TASK-1', 'task_title': 'Learn tool calling', 'task_description': 'Connect OpenRouter to our agent', 'priority': 'high', 'completed': False}]
 task_id_num = 0 
 
+#------Exception------#
+
+class TaskNotFoundError(Exception):
+    pass
+
+#---------------------#
+
+
 def create_task(task_title, task_description, priority="medium"):
     global task_id_num
     task_id_num += 1
@@ -25,18 +33,16 @@ def search_tasks(query):
         or query in task["priority"].lower()
     ]
 
-    if found_tasks:
-        return {"success": True, "result": found_tasks}
-    else:
-        return {"success": False, "Error": "Entered query's task was not found. Either task is not in the list or try changing your searched keyword"}
+    return found_tasks
+
 
 def mark_as_completed(task_id):
     for task in task_list:
         if task["task_id"] == task_id:
             task["completed"] = True
-            return {"success": True, "result": task} 
-    else:
-        return {"success": False, "error": "Task not found"}
+            return task
+    
+    raise TaskNotFoundError(f"Task {task_id} was not found")
 
 
 tool_schema = [
@@ -112,9 +118,45 @@ tool_registry = {"create_task": create_task, "search_tasks": search_tasks, "mark
 def execute(tool_name, arguements):
 
     if tool_name not in tool_registry:
-        return {"Error": f"Unknown Tool: {tool_name}"}
+        return {
+            "success": False, 
+            "error_type": "UNKNOWN_TOOL",
+            "recoverable": False,
+            "error": f"Unknown Tool: {tool_name}"}
 
-    return tool_registry[tool_name](**arguements)
+    try:
+
+        result = tool_registry[tool_name](**arguements)
+
+        return {
+            "success": True,
+            "result": result
+        }
+
+    except TaskNotFoundError as e:
+        return {
+                "success": False,
+                "error_type": "NOT_FOUND",
+                "recoverable": True,
+                "error": str(e)
+            }
+
+    except TypeError as e:
+        return {
+            "success": False,
+            "error_type": "INVALID_ARGUMENTS",
+            "recoverable": True,
+            "error": str(e)
+        }
+    
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error_type": "EXECUTION_ERROR",
+            "recoverable": False,
+            "error": str(e)
+        }
 
 #tool validator
 def is_valid_tool_call(tool_name, arguements):
@@ -127,12 +169,13 @@ def is_valid_tool_call(tool_name, arguements):
                 if required_arguements.issubset(supplied_arguements) and supplied_arguements.issubset(allowed_arguements):
                     return {"valid": True, "Message": "Function and Arguements exsit in tool schema"}
                 else:
-                    return {"valid": False, "Error": "Function exist but arguements are invalid"}
+                    return {"valid": False, "error_type": "INVALID_ARGUMENTS", "recoverable": True, "error": "Function exist but arguements are invalid"}
     else:
-        return {"valid": False, "Error": "Function doesn't exist in tool schema"}
+        return {"valid": False, "error_type": "UNKNOWN_TOOL", "recoverable": False, "error": "Function doesn't exist in tool schema"}
 
 
 
+#----Agent Logic-------
 
 load_dotenv()
 
@@ -148,7 +191,9 @@ state = {
     "goal":None,
     "session": [{"role": "user", "content": "Find my task regarding creating space ship and mail its details to my personal email account"}],
     "status": "running",
+    "final_output": None,
     "step_count": 0,
+    "retry_count": 0,
     "last_action": None,
     "last_result": None
 }
@@ -156,11 +201,13 @@ state = {
 state["goal"] = state["session"][0]["content"]
 
 MAX_ITERATION = 5
+MAX_RETRIES = 2
 
 while state["status"] == "running":
 
-    if state["step_count"] > MAX_ITERATION:
+    if state["step_count"] >= MAX_ITERATION:
         state["status"] = "failed"
+        state["final_output"] = "Agent Reached Maximum Iteration"
         break
 
     response = client.chat.completions.create(
@@ -187,12 +234,27 @@ while state["status"] == "running":
                 tool_result = execute(tool_name=tool_name, arguements=arguements)
             else:
                 tool_result = validation
+            
+            if not tool_result.get("success", validation.get("valid", False)):
+                if tool_result["recoverable"]:
+                    state["retry_count"] += 1
+                    if state["retry_count"] >= MAX_RETRIES:
+                        state["status"] = "failed"
+                        state["final_output"] = "Maximum recovery attempts reached"
+                        break
+
+                elif not tool_result["recoverable"]:
+                    state["status"] = "failed"
+                    state["final_output"] = f"Non-recoverable error: {tool_result['error']}"
+                    break
+                
+            elif tool_result.get("success"):
+                state["retry_count"] = 0
+
             state["last_result"] = tool_result
             state["session"].append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_result)})
     else:
         state["status"] = "completed"
+        state["final_output"] = f"Final Answer: {message.content}"
 
-if state["status"] == "completed":
-    print(f"Final Answer: {message.content}")
-elif state["status"] == "failed":
-    print("Agent Reached Maximum Iteration")
+print(state["final_output"])
