@@ -115,7 +115,7 @@ tool_schema = [
 tool_registry = {"create_task": create_task, "search_tasks": search_tasks, "mark_as_completed": mark_as_completed}
 
 #dispatcher
-def execute(tool_name, arguements):
+def execute(tool_name, arguments):
 
     if tool_name not in tool_registry:
         return {
@@ -126,7 +126,7 @@ def execute(tool_name, arguements):
 
     try:
 
-        result = tool_registry[tool_name](**arguements)
+        result = tool_registry[tool_name](**arguments)
 
         return {
             "success": True,
@@ -159,17 +159,17 @@ def execute(tool_name, arguements):
         }
 
 #tool validator
-def is_valid_tool_call(tool_name, arguements):
+def is_valid_tool_call(tool_name, arguments):
     if tool_name in tool_registry.keys():
         for tool in tool_schema:
             if tool["function"]["name"]==tool_name:
-                allowed_arguements = set(tool["function"]["parameters"]["properties"].keys())
-                required_arguements = set(tool["function"]["required"])
-                supplied_arguements = set(arguements.keys())
-                if required_arguements.issubset(supplied_arguements) and supplied_arguements.issubset(allowed_arguements):
-                    return {"valid": True, "Message": "Function and Arguements exsit in tool schema"}
+                allowed_arguments = set(tool["function"]["parameters"]["properties"].keys())
+                required_arguments = set(tool["function"]["required"])
+                supplied_arguments = set(arguments.keys())
+                if required_arguments.issubset(supplied_arguments) and supplied_arguments.issubset(allowed_arguments):
+                    return {"valid": True, "Message": "Function and Arguments exsit in tool schema"}
                 else:
-                    return {"valid": False, "error_type": "INVALID_ARGUMENTS", "recoverable": True, "error": "Function exist but arguements are invalid"}
+                    return {"valid": False, "error_type": "INVALID_ARGUMENTS", "recoverable": True, "error": "Function exist but arguments are invalid"}
     else:
         return {"valid": False, "error_type": "UNKNOWN_TOOL", "recoverable": False, "error": "Function doesn't exist in tool schema"}
 
@@ -189,7 +189,9 @@ client = OpenAI(
 
 state = {
     "goal":None,
+    "goal_achieved": False,
     "session": [{"role": "user", "content": "Find my task regarding creating space ship and mail its details to my personal email account"}],
+    "action_history": [],
     "status": "running",
     "final_output": None,
     "step_count": 0,
@@ -226,12 +228,19 @@ while state["status"] == "running":
         for tool_call in message.tool_calls:
             state["last_action"] = tool_call
             tool_name = tool_call.function.name
-            arguements = json.loads(tool_call.function.arguments)
-
-            validation = is_valid_tool_call(tool_name, arguements)
+            arguments = json.loads(tool_call.function.arguments)
+            validation = is_valid_tool_call(tool_name, arguments)
 
             if validation["valid"]:
-                tool_result = execute(tool_name=tool_name, arguements=arguements)
+                tool_result = execute(tool_name=tool_name, arguments=arguments)
+
+                state['action_history'].append({"tool": tool_name, "arguments": arguments, "result": tool_result})
+
+                if len(state['action_history']) >= 2:
+                    if state['action_history'][-1] == state['action_history'][-2]:
+                        state["status"] = "failed"
+                        state["final_output"] = "Agent repeated the same action without making progress."
+                        break
             else:
                 tool_result = validation
             
@@ -253,8 +262,16 @@ while state["status"] == "running":
 
             state["last_result"] = tool_result
             state["session"].append({"role": "tool", "tool_call_id": tool_call.id, "content": str(tool_result)})
+
+            if (tool_name == "mark_as_completed" or tool_name == "create_task") and (tool_result.get("success")):
+                state["goal_achieved"] = True
+            
     else:
-        state["status"] = "completed"
+        if state["goal_achieved"]:
+            state["status"] = "completed"
+        else: 
+            state["status"] = "partial"
+
         state["final_output"] = f"Final Answer: {message.content}"
 
 print(state["final_output"])
