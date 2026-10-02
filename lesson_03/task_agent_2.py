@@ -185,8 +185,6 @@ client = OpenAI(
     api_key=os.getenv("OR_API_KEY")
 )
 
-
-
 state = {
     "goal":None,
     "goal_achieved": False,
